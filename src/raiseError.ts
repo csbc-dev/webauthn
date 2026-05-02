@@ -1,3 +1,3 @@
 export function raiseError(message: string): never {
-  throw new Error(`[@wc-bindable/webauthn] ${message}`);
+  throw new Error(`[@csbc-dev/webauthn] ${message}`);
 }

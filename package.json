@@ -1,5 +1,5 @@
 {
-  "name": "@wc-bindable/webauthn",
+  "name": "@csbc-dev/webauthn",
   "version": "0.4.0",
   "description": "Declarative WebAuthn / Passkeys component for Web Components. Server-side challenge + verification, browser-native credentials.create()/.get(), via wc-bindable-protocol.",
   "type": "module",

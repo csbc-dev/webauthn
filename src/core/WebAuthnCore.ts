@@ -659,7 +659,7 @@ export class WebAuthnCore extends EventTarget {
   }
 
   private _failVerify(message: string): never {
-    const err = new Error(`[@wc-bindable/webauthn] ${message}`);
+    const err = new Error(`[@csbc-dev/webauthn] ${message}`);
     // Mark this error as "safe to surface verbatim to the client". The
     // verify handler's catch examines this flag to decide whether to
     // relay `e.message` or collapse to a generic fallback — exactly the

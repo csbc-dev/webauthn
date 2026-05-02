@@ -6,7 +6,7 @@
  *   2. POST /api/webauthn/verify    — backed by createWebAuthnHandlers
  *   3. GET  /client.html            — Playwright entry page
  *   4. GET  /dist/...               — built local files (so the
- *      browser-side importmap resolves @wc-bindable/webauthn from
+ *      browser-side importmap resolves @csbc-dev/webauthn from
  *      the local dist/, not from npm)
  *
  * The verifier is a stub that trusts whatever Chrome's virtual

@@ -49,7 +49,7 @@ export class InMemoryChallengeStore implements IChallengeStore {
     // silently drifting into one of these states.
     if (!Number.isFinite(sweepTtlMs) || sweepTtlMs <= 0) {
       throw new Error(
-        "[@wc-bindable/webauthn] InMemoryChallengeStore sweepTtlMs must be a positive finite number.",
+        "[@csbc-dev/webauthn] InMemoryChallengeStore sweepTtlMs must be a positive finite number.",
       );
     }
     this._sweepTtlMs = sweepTtlMs;

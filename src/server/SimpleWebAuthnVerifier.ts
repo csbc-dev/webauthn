@@ -79,7 +79,7 @@ export class SimpleWebAuthnVerifier implements IWebAuthnVerifier {
       requireUserVerification: params.requireUserVerification,
     });
     if (!result.verified || !result.registrationInfo) {
-      throw new Error("[@wc-bindable/webauthn] registration verification failed.");
+      throw new Error("[@csbc-dev/webauthn] registration verification failed.");
     }
     // @simplewebauthn/server v11 nests the credential fields under
     // `registrationInfo.credential`. Earlier versions exposed them directly;
@@ -101,7 +101,7 @@ export class SimpleWebAuthnVerifier implements IWebAuthnVerifier {
     // Throw with a clear diagnostic so library drift surfaces immediately.
     if (rawId === undefined || publicKey === undefined) {
       throw new Error(
-        "[@wc-bindable/webauthn] @simplewebauthn/server returned an unexpected " +
+        "[@csbc-dev/webauthn] @simplewebauthn/server returned an unexpected " +
         "registrationInfo shape: missing credential id or publicKey. " +
         "The package's response layout may have changed; update the adapter."
       );
@@ -148,7 +148,7 @@ export class SimpleWebAuthnVerifier implements IWebAuthnVerifier {
       },
     });
     if (!result.verified) {
-      throw new Error("[@wc-bindable/webauthn] authentication verification failed.");
+      throw new Error("[@csbc-dev/webauthn] authentication verification failed.");
     }
     return {
       credentialId: params.credential.credentialId,
@@ -192,7 +192,7 @@ export function _classifyImportError(e: any): Error {
   const missingPkg = _extractMissingPackage(msg);
   if (missingPkg === PEER_PACKAGE) {
     return new Error(
-      `[@wc-bindable/webauthn] ${PEER_PACKAGE} is not installed. ` +
+      `[@csbc-dev/webauthn] ${PEER_PACKAGE} is not installed. ` +
       "Install it as a peer dependency or provide a custom IWebAuthnVerifier."
     );
   }
@@ -206,7 +206,7 @@ export function _classifyImportError(e: any): Error {
     ? `${PEER_PACKAGE} loaded a dependency that is missing (${missingPkg}): ${msg}`
     : msg || String(e);
   const wrapped = new Error(
-    `[@wc-bindable/webauthn] failed to load ${PEER_PACKAGE}: ${detail}`,
+    `[@csbc-dev/webauthn] failed to load ${PEER_PACKAGE}: ${detail}`,
   );
   (wrapped as any).cause = e;
   return wrapped;

@@ -301,17 +301,17 @@ export class WebAuthn extends HTMLElement {
 
   private async _runCeremony(): Promise<void> {
     if (!this.challengeUrl) {
-      const err = new Error("[@wc-bindable/webauthn] challenge-url attribute is required.");
+      const err = new Error("[@csbc-dev/webauthn] challenge-url attribute is required.");
       this._failStatus(err);
       throw err;
     }
     if (!this.verifyUrl) {
-      const err = new Error("[@wc-bindable/webauthn] verify-url attribute is required.");
+      const err = new Error("[@csbc-dev/webauthn] verify-url attribute is required.");
       this._failStatus(err);
       throw err;
     }
     if (typeof navigator === "undefined" || !navigator.credentials) {
-      const err = new Error("[@wc-bindable/webauthn] navigator.credentials is not available in this environment.");
+      const err = new Error("[@csbc-dev/webauthn] navigator.credentials is not available in this environment.");
       this._failStatus(err);
       throw err;
     }
@@ -394,7 +394,7 @@ export class WebAuthn extends HTMLElement {
         // Registration cannot proceed without a user identity. The Core enforces
         // the same invariant, but failing here means we avoid a round-trip and
         // produce a Shell-local error the framework can localize.
-        throw new Error("[@wc-bindable/webauthn] user-id, user-name, and user-display-name attributes are required for mode=register.");
+        throw new Error("[@csbc-dev/webauthn] user-id, user-name, and user-display-name attributes are required for mode=register.");
       }
       body.user = { id, name, displayName };
     } else if (this.userId) {
@@ -411,7 +411,7 @@ export class WebAuthn extends HTMLElement {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(`[@wc-bindable/webauthn] challenge request failed (${res.status}): ${text || res.statusText}`);
+      throw new Error(`[@csbc-dev/webauthn] challenge request failed (${res.status}): ${text || res.statusText}`);
     }
     return await _parseJsonOrThrow(res, "challenge");
   }
@@ -435,7 +435,7 @@ export class WebAuthn extends HTMLElement {
       attestation: optionsJSON.attestation,
     };
     const cred = await navigator.credentials.create({ publicKey, signal });
-    if (!cred) throw new Error("[@wc-bindable/webauthn] navigator.credentials.create() returned null.");
+    if (!cred) throw new Error("[@csbc-dev/webauthn] navigator.credentials.create() returned null.");
     return cred as PublicKeyCredential;
   }
 
@@ -451,7 +451,7 @@ export class WebAuthn extends HTMLElement {
       userVerification: optionsJSON.userVerification,
     };
     const cred = await navigator.credentials.get({ publicKey, signal });
-    if (!cred) throw new Error("[@wc-bindable/webauthn] navigator.credentials.get() returned null.");
+    if (!cred) throw new Error("[@csbc-dev/webauthn] navigator.credentials.get() returned null.");
     return cred as PublicKeyCredential;
   }
 
@@ -472,7 +472,7 @@ export class WebAuthn extends HTMLElement {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(`[@wc-bindable/webauthn] verify request failed (${res.status}): ${text || res.statusText}`);
+      throw new Error(`[@csbc-dev/webauthn] verify request failed (${res.status}): ${text || res.statusText}`);
     }
     return await _parseJsonOrThrow(res, "verify");
   }
@@ -550,7 +550,7 @@ async function _parseJsonOrThrow(res: Response, phase: "challenge" | "verify"): 
         : "";
       const snippet = body ? `: ${body.slice(0, 120)}${body.length > 120 ? "…" : ""}` : "";
       throw new Error(
-        `[@wc-bindable/webauthn] ${phase} response was not application/json ` +
+        `[@csbc-dev/webauthn] ${phase} response was not application/json ` +
         `(content-type: ${ct || "<missing>"}) — check the server is returning JSON${snippet}`
       );
     }
@@ -562,7 +562,7 @@ async function _parseJsonOrThrow(res: Response, phase: "challenge" | "verify"): 
     // a more actionable message than the engine's default.
     const msg = e instanceof Error ? e.message : String(e);
     throw new Error(
-      `[@wc-bindable/webauthn] ${phase} response could not be parsed as JSON: ${msg}`
+      `[@csbc-dev/webauthn] ${phase} response could not be parsed as JSON: ${msg}`
     );
   }
 }
@@ -614,7 +614,7 @@ function _filterTransports(raw: unknown): AuthenticatorTransport[] | undefined {
 function _descriptor(c: { id: string; type: string; transports?: string[] }): PublicKeyCredentialDescriptor {
   if (c.type !== "public-key") {
     throw new Error(
-      `[@wc-bindable/webauthn] credential descriptor has unsupported type "${c.type}" — ` +
+      `[@csbc-dev/webauthn] credential descriptor has unsupported type "${c.type}" — ` +
       "only \"public-key\" is defined by the WebAuthn spec."
     );
   }

@@ -10,7 +10,7 @@
  * Deliberately does NOT depend on Buffer (Node-only) or atob/btoa with
  * binary-string gymnastics (silently corrupts non-ASCII bytes). Uses
  * Uint8Array + TextEncoder/Decoder so it works identically in every
- * EventTarget runtime HAWC targets.
+ * EventTarget runtime CSBC targets.
  */
 
 const STANDARD_TO_URL: Record<string, string> = { "+": "-", "/": "_" };
@@ -51,10 +51,10 @@ const _BASE64URL_PATTERN = /^[A-Za-z0-9_-]*$/;
  */
 export function decode(input: string): Uint8Array<ArrayBuffer> {
   if (typeof input !== "string") {
-    throw new TypeError("[@wc-bindable/webauthn] base64url decode expects a string input.");
+    throw new TypeError("[@csbc-dev/webauthn] base64url decode expects a string input.");
   }
   if (!_BASE64URL_PATTERN.test(input)) {
-    throw new Error("[@wc-bindable/webauthn] invalid base64url input: contains characters outside A-Za-z0-9_-.");
+    throw new Error("[@csbc-dev/webauthn] invalid base64url input: contains characters outside A-Za-z0-9_-.");
   }
   const padded = input + "=".repeat((4 - (input.length % 4)) % 4);
   const standard = padded.replaceAll("-", URL_TO_STANDARD["-"]).replaceAll("_", URL_TO_STANDARD._);
@@ -110,7 +110,7 @@ function _nodeBase64Decode(base64: string): string {
     if (ch === undefined) return 0;
     const v = lookup.get(ch);
     if (v === undefined) {
-      throw new Error("[@wc-bindable/webauthn] invalid base64 character during decode.");
+      throw new Error("[@csbc-dev/webauthn] invalid base64 character during decode.");
     }
     return v;
   };
@@ -139,13 +139,13 @@ function _nodeBase64Decode(base64: string): string {
  * accidentally produce unsafe challenges. */
 export function randomChallenge(len: number): string {
   if (!Number.isInteger(len) || len <= 0) {
-    throw new Error("[@wc-bindable/webauthn] randomChallenge length must be a positive integer.");
+    throw new Error("[@csbc-dev/webauthn] randomChallenge length must be a positive integer.");
   }
   const bytes = new Uint8Array(len);
   const cryptoObj: Crypto | undefined =
     (globalThis as any).crypto ?? (globalThis as any).webcrypto;
   if (!cryptoObj?.getRandomValues) {
-    throw new Error("[@wc-bindable/webauthn] no Crypto.getRandomValues available in this runtime.");
+    throw new Error("[@csbc-dev/webauthn] no Crypto.getRandomValues available in this runtime.");
   }
   cryptoObj.getRandomValues(bytes);
   return encode(bytes);

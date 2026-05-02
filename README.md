@@ -1,4 +1,4 @@
-# @wc-bindable/webauthn
+# @csbc-dev/webauthn
 
 Declarative **WebAuthn / Passkeys** component for Web Components. Framework-agnostic passwordless authentication via `wc-bindable-protocol`.
 
@@ -25,7 +25,7 @@ Flip `trigger` to run the ceremony; observe `status`, `credentialId`, `user`, `e
 
 ## Architecture (Case C: browser-anchored execution Shell)
 
-The same HAWC architecture as `@wc-bindable/s3`. Blob bytes are replaced by credential material, but the shape is identical: the Core owns decisions, while the Shell owns the browser-anchored execution the server cannot delegate.
+The same CSBC architecture as `@wc-bindable/s3`. Blob bytes are replaced by credential material, but the shape is identical: the Core owns decisions, while the Shell owns the browser-anchored execution the server cannot delegate.
 
 | Plane | Where | Responsibility |
 |-------|-------|----------------|
@@ -79,12 +79,12 @@ type WebAuthnStatus =
 
 > **SECURITY REQUIRED — CSRF defense is mandatory.** The shipped handlers do **not** perform CSRF token checks or `Origin` header validation. The Shell sends `credentials: "include"` (cookies flow automatically), which makes both endpoints cross-site-forgeable unless YOU enforce CSRF defense in front of — or inside — your `resolveSessionId` hook. Without it, any third-party page can force-authenticate a logged-in user against your endpoints. See [CSRF and Origin header verification](#csrf-and-origin-header-verification) below for the minimum required defenses before you ship this to production. The WebAuthn signature check inside the verifier is NOT a substitute — a forged request still burns a challenge slot and produces a DoS vector.
 
-> **Always import from `@wc-bindable/webauthn/server` on Node.** The root entry (`@wc-bindable/webauthn`) re-exports the `<passkey-auth>` custom-element class, which extends `HTMLElement` and is evaluated at module-load time. In any Node-only runtime (server, Workers, build scripts, tests under `node:` environments) `HTMLElement` is undefined and the import fails immediately with `ReferenceError: HTMLElement is not defined`. The `/server` subpath exports the `WebAuthnCore`, stores, verifier adapter, `HttpError`, and `createWebAuthnHandlers` — none of those touch DOM globals, so they load cleanly under Node, Bun, Deno, and Cloudflare Workers. Browser code uses the root entry; Node code uses `/server`.
+> **Always import from `@csbc-dev/webauthn/server` on Node.** The root entry (`@csbc-dev/webauthn`) re-exports the `<passkey-auth>` custom-element class, which extends `HTMLElement` and is evaluated at module-load time. In any Node-only runtime (server, Workers, build scripts, tests under `node:` environments) `HTMLElement` is undefined and the import fails immediately with `ReferenceError: HTMLElement is not defined`. The `/server` subpath exports the `WebAuthnCore`, stores, verifier adapter, `HttpError`, and `createWebAuthnHandlers` — none of those touch DOM globals, so they load cleanly under Node, Bun, Deno, and Cloudflare Workers. Browser code uses the root entry; Node code uses `/server`.
 
 Install the optional peer dep for the reference verifier:
 
 ```sh
-npm i @wc-bindable/webauthn @simplewebauthn/server
+npm i @csbc-dev/webauthn @simplewebauthn/server
 ```
 
 Wire up a core + the two Fetch-API handlers. Mount them on whatever HTTP framework you use — they speak the platform `Request` / `Response` so Node 18+, Bun, Deno, Cloudflare Workers, Hono, and Next.js route handlers all work.
@@ -97,7 +97,7 @@ import {
   SimpleWebAuthnVerifier,
   createWebAuthnHandlers,
   HttpError,
-} from "@wc-bindable/webauthn/server";
+} from "@csbc-dev/webauthn/server";
 
 const core = new WebAuthnCore({
   rpId: "example.com",
@@ -196,7 +196,7 @@ The in-memory stores are **single-process only** and lose state on restart. For 
 `SimpleWebAuthnVerifier` is an optional adapter. Any class that implements `IWebAuthnVerifier` works:
 
 ```ts
-import type { IWebAuthnVerifier } from "@wc-bindable/webauthn/server";
+import type { IWebAuthnVerifier } from "@csbc-dev/webauthn/server";
 
 class MyVerifier implements IWebAuthnVerifier {
   async verifyRegistration(params) { /* ... */ }
@@ -210,10 +210,10 @@ This mirrors how `s3-uploader` accepts a pluggable `IS3Provider`.
 
 ## Browser setup
 
-Register the element (typically in your app entry). The **root entry is browser-only** — it pulls in the `<passkey-auth>` custom-element class, which extends `HTMLElement` and cannot be evaluated in Node. If you import this from a Node-only module (server boot, build script, isomorphic helper running under SSR) you will get `ReferenceError: HTMLElement is not defined` at module load. Server / Node code must use `@wc-bindable/webauthn/server` instead — see the boundary note in [Server setup](#server-setup).
+Register the element (typically in your app entry). The **root entry is browser-only** — it pulls in the `<passkey-auth>` custom-element class, which extends `HTMLElement` and cannot be evaluated in Node. If you import this from a Node-only module (server boot, build script, isomorphic helper running under SSR) you will get `ReferenceError: HTMLElement is not defined` at module load. Server / Node code must use `@csbc-dev/webauthn/server` instead — see the boundary note in [Server setup](#server-setup).
 
 ```ts
-import { bootstrapWebAuthn } from "@wc-bindable/webauthn";
+import { bootstrapWebAuthn } from "@csbc-dev/webauthn";
 bootstrapWebAuthn();  // defines <passkey-auth>
 ```
 
@@ -265,7 +265,7 @@ Both endpoints expect a session cookie / header the server-side `resolveSessionI
 
 Passkey adoption is being driven by every major SaaS right now. Integrating WebAuthn correctly requires the ceremony to straddle the browser and the server in a very specific way — and every framework's auth library reimplements that coordination from scratch.
 
-With `passkey-auth`, the integration is declarative HTML plus two server handlers. The element exposes the same reactive surface through React, Vue, Svelte, Solid, Preact, Alpine, and Angular adapters because it speaks `wc-bindable-protocol` — the same 20-line protocol that backs every other HAWC component.
+With `passkey-auth`, the integration is declarative HTML plus two server handlers. The element exposes the same reactive surface through React, Vue, Svelte, Solid, Preact, Alpine, and Angular adapters because it speaks `wc-bindable-protocol` — the same 20-line protocol that backs every other CSBC component.
 
 ---
 
