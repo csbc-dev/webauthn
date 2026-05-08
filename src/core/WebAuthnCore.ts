@@ -207,6 +207,14 @@ export class WebAuthnCore extends EventTarget {
     // subclass that carries `toJSON` natively while proxying `name` /
     // `message` / `stack` from the original. External references to the
     // original Error remain unchanged.
+    //
+    // Dedupe identical writes (mirrors Shell's `_setError`). Every
+    // ceremony entry calls `_setError(null)` to clear residue; without
+    // this guard, a fresh Core (already null) emits a spurious
+    // null-detail `passkey-auth:error` event on every challenge call.
+    // Reference-compare only — a fresh-but-equal Error wrapper still
+    // fires (consistent with `_setUser`'s policy).
+    if (this._error === err) return;
     this._error = err ? _wrapSerializable(err) : null;
     this._target.dispatchEvent(new CustomEvent("passkey-auth:error", {
       detail: this._error, bubbles: true,
@@ -245,6 +253,21 @@ export class WebAuthnCore extends EventTarget {
     if (!sessionId) raiseError("sessionId is required.");
     if (!user?.id || !user.name || !user.displayName) {
       raiseError("user.id, user.name, and user.displayName are required.");
+    }
+    // Type-guard each user field. Without this, a caller bypassing the
+    // handler (direct Core invocation, in-process binding, custom server)
+    // could pass `{ id: 123, name: "alice", displayName: "A" }` — the
+    // truthy check above accepts it, `slot.userId = 123` is persisted as a
+    // number, and downstream comparisons (`record.userId !== slot.userId`)
+    // silently fail because a `getById` lookup returns a string-keyed
+    // record while the slot carries a number. Surface as a clean
+    // raiseError at the boundary so the failure mode is obvious.
+    if (
+      typeof user.id !== "string" ||
+      typeof user.name !== "string" ||
+      typeof user.displayName !== "string"
+    ) {
+      raiseError("user.id, user.name, and user.displayName must be non-empty strings.");
     }
     // Guard user.id byte length. WebAuthn §5.4.3 caps `user.id` at 64
     // bytes AFTER UTF-8 encoding — authenticators MAY reject longer
@@ -352,8 +375,25 @@ export class WebAuthnCore extends EventTarget {
     // — direct callers must not be able to feed garbage strings into
     // the store. Reject non-base64url up-front through the same
     // `_failVerify` path that surfaces other protocol-level errors.
+    //
+    // Mirror the handler's full `_validateCredentialShape` triad here:
+    // checking only `response.id` was the lopsided original — `rawId`
+    // and `type` slip past, so a direct caller could feed a payload
+    // where `id` and `rawId` disagree (a confusion-vector closed by
+    // the handler) or where `type` is anything but the spec-defined
+    // `"public-key"` literal. Defense-in-depth means both checks fire
+    // on every entry path, not just the one with the handler in front.
     if (typeof response.id !== "string" || !_BASE64URL_RE.test(response.id)) {
       this._failVerify("credential.id must be a non-empty base64url string.");
+    }
+    if (typeof response.rawId !== "string" || !_BASE64URL_RE.test(response.rawId)) {
+      this._failVerify("credential.rawId must be a non-empty base64url string.");
+    }
+    if (response.id !== response.rawId) {
+      this._failVerify("credential.id and credential.rawId must be equal (both encode the same credential id bytes).");
+    }
+    if (response.type !== "public-key") {
+      this._failVerify("credential.type must be \"public-key\".");
     }
     this._setError(null);
     this._setStatus("verifying");
@@ -432,7 +472,12 @@ export class WebAuthnCore extends EventTarget {
       // not (when it only verifies the signature). Fall back to the raw
       // response's transports — those come straight from the authenticator
       // via `getTransports()` and are the authoritative source anyway.
-      transports: verified.transports ?? response.response.transports,
+      // Filter at persist time so out-of-spec strings never enter the
+      // credential store; the Shell does its own filter at use time, but
+      // letting unknown values into the store would leak undocumented
+      // strings to any consumer that reads the record (audit logs,
+      // admin UIs, future allowCredentials hints).
+      transports: _filterPersistedTransports(verified.transports ?? response.response.transports),
       createdAt: Date.now(),
     };
     try {
@@ -465,6 +510,17 @@ export class WebAuthnCore extends EventTarget {
     userId?: string,
   ): Promise<PublicKeyCredentialRequestOptionsJSON> {
     if (!sessionId) raiseError("sessionId is required.");
+    // Type-guard userId when supplied. Direct Core callers (bypassing the
+    // shipped handler) could pass `123` or `{}` — those would flow into
+    // `slot.userId` as non-string values and break the downstream
+    // `record.userId === slot.userId` equality check at verify time
+    // (number !== string for the same logical id), silently turning
+    // every authentication attempt for that session into "credential not
+    // recognized". Mirror the symmetric defense added to
+    // `createRegistrationChallenge` for the user fields.
+    if (userId !== undefined && (typeof userId !== "string" || userId.length === 0)) {
+      raiseError("userId, when supplied, must be a non-empty string.");
+    }
     this._setError(null);
     // Clear the reactive `user` slot from any prior ceremony. The Core
     // exposes `user` through wcBindable, so a consumer binding the Core
@@ -560,9 +616,20 @@ export class WebAuthnCore extends EventTarget {
     // credential-store lookup a few lines down, and a direct Core caller
     // must not be able to probe with arbitrary strings. Redundant with
     // the handler's `_validateCredentialShape` when the shipped server
-    // adapter is in the path; mandatory for direct Core usage.
+    // adapter is in the path; mandatory for direct Core usage. Mirror
+    // the full triad (id / rawId / id===rawId / type) so the two entry
+    // paths converge on identical defense.
     if (typeof response.id !== "string" || !_BASE64URL_RE.test(response.id)) {
       this._failVerify("credential.id must be a non-empty base64url string.");
+    }
+    if (typeof response.rawId !== "string" || !_BASE64URL_RE.test(response.rawId)) {
+      this._failVerify("credential.rawId must be a non-empty base64url string.");
+    }
+    if (response.id !== response.rawId) {
+      this._failVerify("credential.id and credential.rawId must be equal (both encode the same credential id bytes).");
+    }
+    if (response.type !== "public-key") {
+      this._failVerify("credential.type must be \"public-key\".");
     }
     this._setError(null);
     this._setStatus("verifying");
@@ -725,4 +792,28 @@ function _wrapSerializable(err: Error): Error {
   // NotAllowedError path if we ever route it through here).
   if (typeof (err as any).toJSON === "function") return err;
   return new _SerializableError(err);
+}
+
+/**
+ * Filter `transports` at persist time to the WebAuthn-defined alphabet.
+ * Mirrors the Shell's `_filterTransports` in scope: drop anything outside
+ * the closed union the spec defines so the credential store never holds
+ * out-of-spec strings. Returns `undefined` (omitted field) when the input
+ * is missing or filters down to empty — the persisted record's
+ * `transports` is optional, and an empty array is semantically the same
+ * as "unknown".
+ */
+const _PERSISTED_TRANSPORTS: ReadonlySet<string> = new Set([
+  "usb", "nfc", "ble", "internal", "hybrid",
+]);
+
+function _filterPersistedTransports(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const t of raw) {
+    if (typeof t === "string" && _PERSISTED_TRANSPORTS.has(t)) {
+      out.push(t);
+    }
+  }
+  return out.length ? out : undefined;
 }

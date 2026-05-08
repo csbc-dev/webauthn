@@ -178,7 +178,7 @@ export function createWebAuthnHandlers(
       let sessionId: string | null;
       try {
         sessionId = await resolveSessionId(request);
-      } catch (e: any) {
+      } catch (e: unknown) {
         // resolveSessionId is allowed to throw for "I cannot decide who
         // this is" — most often a 401/403. Honor caller-supplied status
         // AND message only when the thrown value is an HttpError (or any
@@ -222,7 +222,18 @@ export function createWebAuthnHandlers(
           // discoverable-credential flow and the server cannot be made to
           // enumerate other users' credential ids on behalf of an
           // unauthenticated caller.
-          const requestedUserId: string | undefined = body?.userId;
+          //
+          // Type-gate `body.userId` at the handler boundary. The hook
+          // signature promises `string | undefined`; without the gate a
+          // body of `{ userId: 123 }` or `{ userId: {} }` would hand a
+          // non-string to user-supplied hook code, and on the no-hook path
+          // would flow into the Core (which now rejects non-strings, but
+          // that surfaces as a 500 here instead of a clean 400). Coerce
+          // anything that is not a non-empty string back to undefined so
+          // both paths see a well-typed value.
+          const rawUserId = body?.userId;
+          const requestedUserId: string | undefined =
+            typeof rawUserId === "string" && rawUserId.length > 0 ? rawUserId : undefined;
           const targetUserId = resolveAuthenticationUserId
             ? (await resolveAuthenticationUserId(request, requestedUserId)) ?? undefined
             : undefined;
@@ -230,7 +241,7 @@ export function createWebAuthnHandlers(
           return _json(optionsBlob, 200);
         }
         return _json({ error: `unknown mode: ${mode}` }, 400);
-      } catch (e: any) {
+      } catch (e: unknown) {
         // Caller-supplied status wins. Without this every auth/permission
         // failure inside a hook collapses into 500, which both misleads
         // operators and corrupts 5xx-based infra alerts. Default 500 only
@@ -257,7 +268,7 @@ export function createWebAuthnHandlers(
       let sessionId: string | null;
       try {
         sessionId = await resolveSessionId(request);
-      } catch (e: any) {
+      } catch (e: unknown) {
         return _json({ error: _clientMessage(e, "unauthorized") }, _statusFromError(e) ?? 401);
       }
       if (!sessionId) return _json({ error: "session required" }, 401);
@@ -307,7 +318,7 @@ export function createWebAuthnHandlers(
         } else {
           record = await core.verifyAuthentication(sessionId, credential);
         }
-      } catch (e: any) {
+      } catch (e: unknown) {
         // Core's `_failVerify` marks its errors with `clientVisible: true`
         // so we surface them verbatim ("no active challenge", "challenge
         // expired", "mode mismatch", etc.) — those are the documented
@@ -326,7 +337,7 @@ export function createWebAuthnHandlers(
       if (resolveUser) {
         try {
           user = (await resolveUser(record.userId)) ?? null;
-        } catch (e: any) {
+        } catch (e: unknown) {
           // Same HttpError-only message policy as the challenge catch:
           // preserve caller-supplied messages (HttpError, Error with
           // `.status`) but mask plain internal failures behind the fixed

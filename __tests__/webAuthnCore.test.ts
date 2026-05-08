@@ -371,6 +371,26 @@ describe("WebAuthnCore", () => {
       expect(record.transports).toEqual(["internal", "hybrid"]);
     });
 
+    it("filters out-of-spec transports before persisting (regression)", async () => {
+      // _filterPersistedTransports drops anything outside the WebAuthn
+      // closed union. Without it, an attestation containing an unknown
+      // string ("bogus") would land in the credential record and leak
+      // out via audit logs / admin UIs / future allowCredentials hints.
+      // Verifier-supplied transports take precedence over the raw
+      // response — exercise that path.
+      await seedRegChallenge();
+      verifier.nextReg = {
+        credentialId: "cred-1",
+        publicKey: "pk",
+        counter: 0,
+        transports: ["internal", "bogus", "hybrid"],
+      };
+      const record = await core.verifyRegistration("s1", mkRegistrationResponse());
+      expect(record.transports).toEqual(["internal", "hybrid"]);
+      const stored = await credentialStore.getById("cred-1");
+      expect(stored?.transports).toEqual(["internal", "hybrid"]);
+    });
+
     it("surfaces credential-store write failures during registration verify", async () => {
       const failingStore = {
         put: async () => { throw new Error("credential-store down"); },
@@ -537,6 +557,25 @@ describe("WebAuthnCore", () => {
     it("throws when verifyAuthentication is missing required arguments", async () => {
       await expect(core.verifyAuthentication("", mkAuthResponse("cred-1"))).rejects.toThrow(/sessionId/);
       await expect(core.verifyAuthentication("s1", null as any)).rejects.toThrow(/response is required/);
+    });
+
+    it("rejects when verifyAuthentication response.rawId is not base64url (defense-in-depth)", async () => {
+      // The shipped handler validates this same shape, but direct Core
+      // callers must not be able to feed garbage strings into the
+      // credential-store lookup that follows. Mirror the registration
+      // boundary guard.
+      const bad = { ...mkAuthResponse("cred-1"), rawId: "has/slash" };
+      await expect(core.verifyAuthentication("s1", bad)).rejects.toThrow(/rawId must be a non-empty base64url/);
+    });
+
+    it("rejects when response.id and response.rawId disagree", async () => {
+      const bad = { ...mkAuthResponse("cred-1"), rawId: "cred-2" };
+      await expect(core.verifyAuthentication("s1", bad)).rejects.toThrow(/id and credential\.rawId must be equal/);
+    });
+
+    it("rejects when response.type is not \"public-key\"", async () => {
+      const bad = { ...mkAuthResponse("cred-1"), type: "bogus" as any };
+      await expect(core.verifyAuthentication("s1", bad)).rejects.toThrow(/type must be "public-key"/);
     });
 
     it("rejects when no authentication challenge exists", async () => {

@@ -50,7 +50,9 @@
       const el = document.createElement("passkey-auth");
       el.id = "passkey";
       el.setAttribute("mode", mode);
-      el.setAttribute("rp-id", "localhost");
+      // NB: `rp-id` is server-authoritative (Case C) — it is set on
+      // WebAuthnCoreOptions, NOT exposed as a Shell attribute. Setting
+      // it on the element would be a silent no-op.
       el.setAttribute("challenge-url", "/api/webauthn/challenge");
       el.setAttribute("verify-url", "/api/webauthn/verify");
       for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);

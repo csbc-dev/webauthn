@@ -180,6 +180,36 @@ describe("SimpleWebAuthnVerifier", () => {
     vi.doUnmock("@simplewebauthn/server");
   });
 
+  it("throws when registrationInfo is missing credential id / publicKey (library-drift defense)", async () => {
+    // Defense against a future library shape that drops id / publicKey
+    // entirely (renamed field, internal refactor). Without this throw,
+    // `encode(undefined)` would coerce to "" and we would persist a
+    // credentialId of "" — a future verifyAuthentication would lookup
+    // credential "" and surface a confusing "not registered" error
+    // instead of the true "library returned unexpected data" signal.
+    vi.resetModules();
+    vi.doMock("@simplewebauthn/server", () => ({
+      verifyRegistrationResponse: vi.fn().mockResolvedValue({
+        verified: true,
+        registrationInfo: {},
+      }),
+      verifyAuthenticationResponse: vi.fn(),
+    }));
+    const { SimpleWebAuthnVerifier: Mod } = await import("../src/server/SimpleWebAuthnVerifier");
+    const v = new Mod();
+    await expect(v.verifyRegistration({
+      response: {
+        id: "cred-1", rawId: "cred-1", type: "public-key",
+        response: { clientDataJSON: "c", attestationObject: "a" },
+      },
+      expectedChallenge: "c",
+      expectedOrigin: "https://example.com",
+      expectedRPID: "example.com",
+      requireUserVerification: false,
+    })).rejects.toThrow(/unexpected.*registrationInfo shape/);
+    vi.doUnmock("@simplewebauthn/server");
+  });
+
   it("throws when registration verification is unsuccessful", async () => {
     vi.resetModules();
     vi.doMock("@simplewebauthn/server", () => ({

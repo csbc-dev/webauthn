@@ -146,7 +146,7 @@ Any handler hook can short-circuit to a specific status code by throwing `HttpEr
 
 The split inside `verify` matters: a Core verify failure is almost always client-caused (expired challenge, replay, wrong origin) and shouldn't page anyone, while a `resolveUser` failure is application territory (DB outage, IdP timeout) and must surface as 5xx. Authentication / authorization failures inside any hook should throw `HttpError(401)` or `HttpError(403)` so they neither pollute 5xx alerts nor get mis-classified as 400 client errors.
 
-Caller-supplied `.status` overrides every default. `.status` values that are not integers in `[400, 600)` are ignored (the default for that phase applies) — this prevents an attacker-controlled error from downgrading a 500 to a 200 or emitting a redirect on a failure path.
+Caller-supplied `.status` overrides every default. `.status` values that are not integers in `[400, 600)` are ignored (the default for that phase applies) — this prevents an attacker-controlled error from downgrading a 500 to a 200 or emitting a redirect on a failure path. Note that `HttpError` itself does NOT validate the status passed to its constructor; the range check happens later in the handler when the error is converted to a response. Constructing `new HttpError(200, "...")` and throwing it will silently fall back to the endpoint default (500 for challenge, 400 for verify).
 
 ### Authenticate enumeration defense
 

@@ -804,6 +804,16 @@ describe("<passkey-auth> shell", () => {
       expect(el.style.display).toBe("none");
     });
 
+    it("connectedCallback preserves a pre-set inline display style", () => {
+      // Regression: applications that set `display: contents` (slotted
+      // rendering) or `display: block` (debugging) must not have their
+      // author-set style clobbered on each connect / mount cycle.
+      const el = document.createElement("passkey-auth") as WebAuthn;
+      el.style.display = "contents";
+      document.body.appendChild(el);
+      expect(el.style.display).toBe("contents");
+    });
+
     it("does not redispatch status when already in error", async () => {
       const el = mkElement({ mode: "authenticate" });
       const statuses: string[] = [];
@@ -1061,6 +1071,116 @@ describe("<passkey-auth> shell", () => {
       globalThis.fetch = vi.fn().mockImplementation(() => Promise.reject(undefined)) as any;
       await expect(el.start()).rejects.toBeInstanceOf(Error);
       expect(el.error!.message).toBe("unknown error (nothing thrown)");
+    });
+  });
+
+  describe("verify-response shape gate & rawId guard (regression)", () => {
+    // Without these tests, a regression that loosens or removes
+    // `_validateVerifyResponse` / the rawId null-guard would pass CI
+    // even though those guards prevent type-violating values from
+    // flowing into the reactive surface (`credentialId: string`,
+    // `user: WebAuthnUser | null`) and prevent cryptic codec TypeErrors
+    // from out-of-spec authenticator responses.
+
+    it("rejects a verify response whose credentialId is not a string", async () => {
+      const el = mkElement({
+        mode: "authenticate",
+        "challenge-url": "/c", "verify-url": "/v",
+      });
+      globalThis.fetch = vi.fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ challenge: encode(new Uint8Array([1])), rpId: "x", allowCredentials: [] }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ credentialId: 42 }) }) as any;
+      stubCredentials({ get: vi.fn().mockResolvedValue(fakeAssertionCredential()) });
+      await expect(el.start()).rejects.toThrow(/missing a string credentialId/);
+    });
+
+    it("rejects a verify response whose user is not a {id,name,displayName} object", async () => {
+      const el = mkElement({
+        mode: "authenticate",
+        "challenge-url": "/c", "verify-url": "/v",
+      });
+      globalThis.fetch = vi.fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ challenge: encode(new Uint8Array([1])), rpId: "x", allowCredentials: [] }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ credentialId: "cred-1", user: "alice" }),
+        }) as any;
+      stubCredentials({ get: vi.fn().mockResolvedValue(fakeAssertionCredential()) });
+      await expect(el.start()).rejects.toThrow(/user must be \{ id, name, displayName \}/);
+    });
+
+    it("throws a labeled error when navigator.credentials.create returns a credential with null rawId", async () => {
+      // Out-of-spec authenticator returns rawId: null. Without the guard
+      // in `_serializeRegistration`, `encode(null)` would throw a cryptic
+      // TypeError from the codec; the labeled error makes the failure
+      // debuggable.
+      const el = mkElement({
+        mode: "register",
+        "challenge-url": "/challenge",
+        "verify-url": "/verify",
+        "user-id": "u-1", "user-name": "a@x", "user-display-name": "Alice",
+      });
+      globalThis.fetch = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          rp: { id: "example.com", name: "Example" },
+          user: { id: encode(new TextEncoder().encode("u-1")), name: "a@x", displayName: "Alice" },
+          challenge: encode(new Uint8Array([1, 2, 3])),
+          pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+        }),
+      }) as any;
+      stubCredentials({
+        create: vi.fn().mockResolvedValue({
+          id: "cred-1",
+          rawId: null,
+          type: "public-key",
+          response: {
+            clientDataJSON: new Uint8Array([1]).buffer,
+            attestationObject: new Uint8Array([2]).buffer,
+          },
+          getClientExtensionResults: () => ({}),
+        }),
+        get: vi.fn(),
+      });
+      await expect(el.start()).rejects.toThrow(/rawId is missing.*non-spec response/);
+    });
+  });
+
+  describe("Shell transports filter (regression)", () => {
+    // `_filterTransports` drops out-of-spec transport strings before
+    // they reach `navigator.credentials.get()`. A drift-buggy server
+    // could otherwise ship `["internal", "bogus", "hybrid"]` and trip
+    // strict-validation engines.
+    it("drops unknown transport strings from allowCredentials before passing to navigator.credentials.get", async () => {
+      const el = mkElement({
+        mode: "authenticate",
+        "challenge-url": "/c", "verify-url": "/v",
+      });
+      globalThis.fetch = vi.fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            challenge: encode(new Uint8Array([1])),
+            rpId: "x",
+            allowCredentials: [{
+              id: encode(new Uint8Array([9, 8])),
+              type: "public-key",
+              transports: ["internal", "bogus", "hybrid"],
+            }],
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ credentialId: "cred-1" }) }) as any;
+      const getMock = vi.fn().mockResolvedValue(fakeAssertionCredential());
+      stubCredentials({ get: getMock, create: vi.fn() });
+      await el.start();
+      const arg = getMock.mock.calls[0][0];
+      expect(arg.publicKey.allowCredentials[0].transports).toEqual(["internal", "hybrid"]);
     });
   });
 });

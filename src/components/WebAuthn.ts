@@ -225,6 +225,12 @@ export class WebAuthn extends HTMLElement {
    * `start()` while the previous is mid-flight aborts the first and waits
    * for it to unwind before starting fresh. The pending navigator.credentials
    * call is cancelled via its AbortSignal so the browser's UI dismisses.
+   *
+   * Generation note: when three or more `start()` calls overlap, only the
+   * latest one runs the ceremony. Earlier-but-still-pending segments
+   * resolve silently (no rejection, no event) once they detect a newer
+   * generation has superseded them — they do NOT each run a ceremony in
+   * sequence. Callers awaiting a superseded `start()` see a clean resolve.
    */
   async start(): Promise<void> {
     // Serialize overlapping start() calls through a single chain. Each
@@ -474,7 +480,16 @@ export class WebAuthn extends HTMLElement {
       const text = await res.text().catch(() => "");
       throw new Error(`[@csbc-dev/webauthn] verify request failed (${res.status}): ${text || res.statusText}`);
     }
-    return await _parseJsonOrThrow(res, "verify");
+    const parsed = await _parseJsonOrThrow(res, "verify");
+    // The verify response is server-supplied JSON — a compromised /
+    // mis-configured server could ship a payload with the wrong shape
+    // (e.g. credentialId as a number, user as a string). Without this
+    // shape check, those values would flow straight into the reactive
+    // setters (`_setCredentialId`, `_setUser`) and corrupt the typed
+    // surface (`credentialId: string`, `user: WebAuthnUser | null`)
+    // observers rely on.
+    _validateVerifyResponse(parsed);
+    return parsed;
   }
 
   private _failStatus(err: Error): void {
@@ -504,6 +519,13 @@ export class WebAuthn extends HTMLElement {
 }
 
 function _serializeRegistration(cred: PublicKeyCredential): RegistrationResponseJSON {
+  // Guard against out-of-spec authenticators that hand back a null /
+  // undefined rawId — `encode(null)` would throw a cryptic TypeError
+  // deep inside the codec; surface a labeled error instead so the
+  // failure is debuggable.
+  if (cred.rawId == null) {
+    throw new Error("[@csbc-dev/webauthn] credential.rawId is missing — authenticator returned a non-spec response.");
+  }
   const response = cred.response as AuthenticatorAttestationResponse;
   const transports = typeof (response as any).getTransports === "function"
     ? ((response as any).getTransports() as string[])
@@ -626,6 +648,42 @@ function _descriptor(c: { id: string; type: string; transports?: string[] }): Pu
   };
 }
 
+/**
+ * Minimal runtime check for the verify endpoint's JSON body.
+ *
+ * The TypeScript signature on `_postVerify` is a compile-time fiction once
+ * the response leaves the server — by the time it reaches `_setCredentialId`
+ * / `_setUser` we have lost the type guarantees. A drift-buggy or
+ * compromised server that returns `{ credentialId: 42 }` or
+ * `{ user: "alice" }` would otherwise pollute the reactive surface with
+ * values that violate `credentialId: string` / `user: WebAuthnUser | null`.
+ *
+ * This is a thin shape gate, not an exhaustive validator: we check the
+ * keys we actually feed into setters and let any extra fields through.
+ */
+function _validateVerifyResponse(
+  v: unknown,
+): asserts v is { credentialId: string; user?: WebAuthnUser } {
+  if (!v || typeof v !== "object") {
+    throw new Error("[@csbc-dev/webauthn] verify response must be a JSON object.");
+  }
+  const r = v as Record<string, unknown>;
+  if (typeof r.credentialId !== "string" || r.credentialId.length === 0) {
+    throw new Error("[@csbc-dev/webauthn] verify response is missing a string credentialId.");
+  }
+  if (r.user !== undefined && r.user !== null) {
+    const u = r.user as Record<string, unknown>;
+    if (
+      typeof u !== "object" ||
+      typeof u.id !== "string" ||
+      typeof u.name !== "string" ||
+      typeof u.displayName !== "string"
+    ) {
+      throw new Error("[@csbc-dev/webauthn] verify response user must be { id, name, displayName } strings or omitted.");
+    }
+  }
+}
+
 function _asError(e: unknown): Error {
   if (e instanceof Error) return e;
   // `null` / `undefined` — code occasionally surfaces these when a
@@ -650,6 +708,12 @@ function _asError(e: unknown): Error {
 }
 
 function _serializeAuthentication(cred: PublicKeyCredential): AuthenticationResponseJSON {
+  // Same null-rawId guard as `_serializeRegistration` — surface a
+  // labeled error rather than letting `encode(null)` throw a cryptic
+  // TypeError from the codec.
+  if (cred.rawId == null) {
+    throw new Error("[@csbc-dev/webauthn] credential.rawId is missing — authenticator returned a non-spec response.");
+  }
   const response = cred.response as AuthenticatorAssertionResponse;
   return {
     id: cred.id,

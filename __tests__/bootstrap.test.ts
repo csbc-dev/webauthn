@@ -79,4 +79,21 @@ describe("bootstrap + registration", () => {
     setConfig({});
     expect(config.tagNames.webauthn).toBe("passkey-auth");
   });
+
+  it("setConfig + getConfig terminate on circular partials (regression)", () => {
+    // Regression: deepFreeze / deepClone in `config.ts` use a WeakSet /
+    // WeakMap to track visited nodes specifically so a self-referential
+    // partial does not stack-overflow. Pin the contract here so a future
+    // refactor that drops the cycle guard fails this test instead of
+    // hanging the process.
+    const cyclic: any = { tagNames: { webauthn: "cycle-tag" } };
+    cyclic.tagNames.self = cyclic.tagNames; // self-reference
+    expect(() => setConfig(cyclic)).not.toThrow();
+    // getConfig deep-clones + deep-freezes the live config; without the
+    // cycle guard this would recurse forever even though the cycle was
+    // only on the *partial* (Object.assign brings the back-reference
+    // into _config.tagNames).
+    expect(() => getConfig()).not.toThrow();
+    expect(config.tagNames.webauthn).toBe("cycle-tag");
+  });
 });
