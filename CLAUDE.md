@@ -1,22 +1,22 @@
 # CLAUDE.md
 
-このリポジトリ (`@csbc-dev/webauthn`) は [`@wc-bindable/webauthn`](https://github.com/wc-bindable-protocol/wc-bindable-protocol/tree/main/packages/webauthn) を起点として、csbc-dev/arch のアーキテクチャ群の一員として再パッケージしたものです。設計思想を理解するうえで前提となる 2 つのドキュメントを以下にまとめます。
+This repository (`@csbc-dev/webauthn`) is a re-packaging of [`@wc-bindable/webauthn`](https://github.com/wc-bindable-protocol/wc-bindable-protocol/tree/main/packages/webauthn) as a member of the csbc-dev/arch architecture suite. The two documents below are prerequisite reading for the design philosophy.
 
 ---
 
-## 1. wc-bindable-protocol の概要
+## 1. wc-bindable-protocol overview
 
-`EventTarget` を継承する任意のクラスが、自身のリアクティブなプロパティを宣言するためのフレームワーク非依存・最小プロトコル。React / Vue / Svelte / Angular / Solid などのリアクティビティシステムが、フレームワーク固有のグルーコードを書かずに任意のコンポーネントに束縛できるようにする。
+A framework-neutral, minimal protocol that lets any class extending `EventTarget` declare its own reactive properties. It allows the reactivity systems of React / Vue / Svelte / Angular / Solid and others to bind arbitrary components without having to write framework-specific glue code.
 
-### コアアイデア
+### Core idea
 
-- コンポーネント作者は **何が** バインド可能かを宣言する
-- フレームワーク利用側は **どう** バインドするかを決める
-- 双方は互いを知らなくてよい
+- Component authors declare **what** is bindable
+- Framework consumers decide **how** to bind it
+- Neither side needs to know the other
 
-### 宣言の仕方
+### How to declare
 
-`static wcBindable` フィールドにスキーマを書くだけ。
+Just write a schema in the `static wcBindable` field.
 
 ```javascript
 class MyFetchCore extends EventTarget {
@@ -27,94 +27,138 @@ class MyFetchCore extends EventTarget {
       { name: "value",   event: "my-fetch:value-changed" },
       { name: "loading", event: "my-fetch:loading-changed" },
     ],
-    inputs:   [{ name: "url" }, { name: "method" }],   // 任意
-    commands: [{ name: "fetch", async: true }, { name: "abort" }],  // 任意
+    inputs:   [{ name: "url" }, { name: "method" }],   // optional
+    commands: [{ name: "fetch", async: true }, { name: "abort" }],  // optional
   };
 }
 ```
 
-| フィールド | 必須 | 役割 |
+| Field | Required | Role |
 |---|---|---|
-| `properties` | ✅ | 状態変化を `CustomEvent` で通知するプロパティ群（出力） |
-| `inputs` | — | 設定可能なプロパティ（入力。宣言のみで自動同期はしない） |
-| `commands` | — | 呼び出し可能なメソッド（リモートプロキシやツーリング向け） |
+| `properties` | ✅ | Properties (outputs) whose state changes are announced via `CustomEvent` |
+| `inputs` | — | Settable properties (inputs; declaration only — no auto-sync) |
+| `commands` | — | Callable methods (intended for remote proxies and tooling) |
 
-### バインドの仕組み
+### How binding works
 
-アダプタは以下を行うだけ：
+An adapter only needs to:
 
-1. `target.constructor.wcBindable` を読む
-2. `protocol === "wc-bindable" && version === 1` を確認
-3. 各 `property` について `target[name]` を即時読み取って初期値を配信し、続いて `event` を購読する
+1. Read `target.constructor.wcBindable`
+2. Verify `protocol === "wc-bindable" && version === 1`
+3. For each `property`, eagerly read `target[name]` to publish the initial value, then subscribe to `event`
 
-`bind()` は実装たかだか 20 行。フレームワークアダプタも数十行で書ける。
+`bind()` is at most ~20 lines to implement. Framework adapters can be written in tens of lines.
 
-### スコープ外（意図的）
+### Out of scope (intentionally)
 
-- 自動双方向同期（入力反映は呼び出し側の責任）
-- フォーム統合
+- Automatic two-way sync (input application is the caller's responsibility)
+- Form integration
 - SSR / hydration
-- 値の型検証 / スキーマ検証
+- Value type / schema validation
 
-### なぜ EventTarget か
+### Why EventTarget
 
-`HTMLElement` ではなく `EventTarget` を最小要件にしているため、Node.js / Deno / Cloudflare Workers などブラウザ外ランタイムでも同じプロトコルが動作する。`HTMLElement` は `EventTarget` のサブクラスなので Web Components は自動的に互換。
+Because the minimum requirement is `EventTarget` rather than `HTMLElement`, the same protocol works on non-browser runtimes such as Node.js / Deno / Cloudflare Workers. `HTMLElement` is a subclass of `EventTarget`, so Web Components are automatically compatible.
 
-参考: [wc-bindable-protocol/SPEC.md](https://github.com/wc-bindable-protocol/wc-bindable-protocol/blob/main/SPEC.md)
+Reference: [wc-bindable-protocol/SPEC.md](https://github.com/wc-bindable-protocol/wc-bindable-protocol/blob/main/SPEC.md)
 
 ---
 
-## 2. Core/Shell Bindable Component (CSBC) アーキテクチャの概要
+## 2. Core/Shell Bindable Component (CSBC) architecture overview
 
-wc-bindable-protocol を土台に、**業務ロジック（特に非同期処理）をフレームワーク層から Web Component 側に移すこと** で、フレームワークロックインを構造的に解消するアーキテクチャ。
+Built on top of wc-bindable-protocol, CSBC structurally eliminates framework lock-in by **moving business logic (especially async work) out of the framework layer and into the Web Component side**.
 
-### 解こうとする問題
+### The problem it solves
 
-フレームワーク移行コストの真の発生源は UI の互換性ではなく、**フレームワーク固有のライフサイクル API（`useEffect` / `onMounted` / `onMount` …）と密結合した async ロジック** である。テンプレートは機械的に書き換えられても、async コードは意味理解を要求するため移植コストが跳ね上がる。
+The real source of framework-migration cost is not UI compatibility — it is **async logic that is tightly coupled to framework-specific lifecycle APIs (`useEffect` / `onMounted` / `onMount` …)**. Templates can be rewritten mechanically, but async code requires semantic understanding, which sends porting cost through the roof.
 
-### 三層構造
+### Three-layer structure
 
-1. **Headless Web Component 層** — fetch / WebSocket / タイマー等の async 処理と状態 (`value`, `loading`, `error`, …) を内部に封じ込める。UI は持たず、純粋なサービス層として振る舞う。
-2. **Protocol 層 (wc-bindable-protocol)** — 上記の状態を `static wcBindable` + `CustomEvent` で外に開く。
-3. **Framework 層** — 薄いアダプタでプロトコルに接続し、受け取った状態を描画する。**async コードはここに一切書かない**。
+1. **Headless Web Component layer** — Encapsulates async work (fetch / WebSocket / timers) and state (`value`, `loading`, `error`, …) inside the component. Has no UI; behaves purely as a service layer.
+2. **Protocol layer (wc-bindable-protocol)** — Exposes that state to the outside via `static wcBindable` + `CustomEvent`.
+3. **Framework layer** — A thin adapter connects to the protocol and renders the received state. **No async code lives here.**
 
-### Core / Shell の分離
+### Core / Shell separation
 
-Headless 層は更に二つに分解される。**唯一の不変条件は「Shell が常に薄い」ことではなく、決定権の所在**：
+The Headless layer is further decomposed in two. **The single invariant is not "Shell stays thin" — it is the location of decision authority**:
 
-- **Core (`EventTarget`) — 決定を持つ**
-  業務ロジック、ポリシー、状態遷移、認可関連の振る舞い、イベント発火。DOM 非依存にできれば Node.js / Deno / Workers にも持ち運べる。
-- **Shell (`HTMLElement`) — 委譲できない実行のみを持つ**
-  フレームワーク接続、DOM ライフサイクル、ブラウザでしか実行できない処理。
+- **Core (`EventTarget`) — owns decisions**
+  Business logic, policy, state transitions, authorization-related behavior, event dispatch. If kept DOM-independent, it can be carried to Node.js / Deno / Workers.
+- **Shell (`HTMLElement`) — owns only the execution that cannot be delegated**
+  Framework wiring, DOM lifecycle, work that can only run in a browser.
 
-設計上の鍵は **target 注入** パターン: Core のコンストラクタが任意の `EventTarget` を受け取り、すべてのイベントをそこへディスパッチする。Shell が `this` を渡せば、Core のイベントが直接 DOM 要素から発火し、再ディスパッチが不要になる。
+The key design pattern is **target injection**: the Core's constructor accepts an arbitrary `EventTarget` and dispatches every event there. When the Shell hands `this` in, the Core's events fire directly from the DOM element and no re-dispatch is needed.
 
-### 4 つの正準ケース
+### The four canonical cases
 
-| ケース | Core の場所 | Shell の役割 | 例 |
+| Case | Core location | Shell role | Example |
 |---|---|---|---|
-| A | ブラウザ | ブラウザ依存 Core の薄いラッパ | `auth0-gate` (local) |
-| B1 | サーバ | コマンド仲介・プロキシ型の薄い Shell | `ai-agent` (remote) |
-| B2 | サーバ | 観測専用の薄い Shell（リモートセッション購読のみ） | `feature-flags` |
-| C | サーバ | ブラウザ固定のデータプレーンを実行する Shell | `s3-uploader`, **`passkey-auth`**, `stripe-checkout` |
+| A | Browser | Thin wrapper around a browser-dependent Core | `auth0-gate` (local) |
+| B1 | Server | Thin proxy-style Shell that mediates commands | `ai-agent` (remote) |
+| B2 | Server | Thin observation-only Shell (subscribes to a remote session) | `feature-flags` |
+| C | Server | Shell that runs a browser-bound data plane | `s3-uploader`, **`passkey-auth`**, `stripe-checkout` |
 
-ケース C は CSBC からの逸脱ではなく **第一級のケース**。ブラウザでしか実行できないデータプレーン（直接アップロード、WebRTC、WebUSB、`File System Access API`、ユーザジェスチャ依存の処理、PCI スコープを避けるための Stripe Elements など）が存在するときに発生する。Shell が太くなっても、**意思決定が Core にある限り** CSBC 違反ではない。
+Case C is not a deviation from CSBC but a **first-class case**. It arises whenever a data plane can only execute in the browser (direct uploads, WebRTC, WebUSB, `File System Access API`, work that depends on a user gesture, Stripe Elements to keep PCI scope out, etc.). Even when the Shell grows thicker, **as long as decisions remain in the Core**, it does not violate CSBC.
 
-> 不変条件:
-> **Core はすべての決定を持つ。Shell は委譲できない実行だけを持つ。**
+> Invariant:
+> **The Core owns every decision. The Shell owns only the execution that cannot be delegated.**
 
-### 横断する 3 つの境界
+### The three boundaries crossed
 
-| 境界 | 横断する主体 | メカニズム |
+| Boundary | Crossed by | Mechanism |
 |---|---|---|
-| ランタイム境界 | Core (`EventTarget`) | DOM 非依存。Node / Deno / Workers で動作 |
-| フレームワーク境界 | Shell (`HTMLElement`) | 属性マッピング + `ref` バインディング |
-| ネットワーク境界 | `@wc-bindable/remote` | プロキシ EventTarget + JSON ワイヤープロトコル |
+| Runtime boundary | Core (`EventTarget`) | DOM-independent. Runs on Node / Deno / Workers |
+| Framework boundary | Shell (`HTMLElement`) | Attribute mapping + `ref` binding |
+| Network boundary | `@wc-bindable/remote` | Proxy EventTarget + JSON wire protocol |
 
-`@wc-bindable/remote` は `RemoteShellProxy`（サーバ側）と `RemoteCoreProxy`（クライアント側）のペアで、Core をサーバへ完全に押し出しつつクライアント側の `bind()` を変えずに動かす。トランスポートは WebSocket がデフォルトだが、最小インタフェース (`ClientTransport` / `ServerTransport`) を満たせば MessagePort / BroadcastChannel / WebTransport などに差し替え可能。
+`@wc-bindable/remote` is a pair of `RemoteShellProxy` (server side) and `RemoteCoreProxy` (client side) that pushes the Core all the way to the server while leaving the client-side `bind()` unchanged. The default transport is WebSocket, but anything that satisfies the minimum interfaces (`ClientTransport` / `ServerTransport`) — MessagePort / BroadcastChannel / WebTransport — can be swapped in.
 
-### 本パッケージにおける位置付け
+### How this package fits in
 
-`@csbc-dev/webauthn` は **ケース C**: WebAuthn セレモニーの決定（チャレンジ発行と検証、クレデンシャル永続化、ユーザ解決、リプレイ防止のためのチャレンジスロット管理、署名検証ポリシー）はすべて `WebAuthnCore` (Core, `EventTarget`) が持つ。`<passkey-auth>` (Shell, `HTMLElement`) は **ブラウザでしか実行できないデータプレーン** ―― すなわち `navigator.credentials.create()` / `.get()` の起動と、その結果 (`PublicKeyCredential`) の base64url 直列化、サーバの `/challenge` ・ `/verify` エンドポイントとの往復 ―― だけを担う。Core はサーバ側に置かれるため、`@simplewebauthn/server` を介した署名検証ロジック、チャレンジストア、クレデンシャルストアはクライアントに露出しない構成になる。
+`@csbc-dev/webauthn` is **Case C**: every WebAuthn-ceremony decision (challenge issuance and verification, credential persistence, user resolution, challenge-slot management for replay prevention, signature-verification policy) lives in `WebAuthnCore` (Core, `EventTarget`). `<passkey-auth>` (Shell, `HTMLElement`) carries only the **data plane that can only run in a browser** — i.e. invoking `navigator.credentials.create()` / `.get()`, base64url-serializing the resulting `PublicKeyCredential`, and round-tripping through the server's `/challenge` and `/verify` endpoints. Because the Core lives on the server, signature-verification logic (via `@simplewebauthn/server`), the challenge store, and the credential store are never exposed to the client.
 
-参考: [csbc-dev/arch (旧 hawc)](https://github.com/csbc-dev/arch/blob/main/README.md)
+Reference: [csbc-dev/arch (formerly hawc)](https://github.com/csbc-dev/arch/blob/main/README.md)
+
+---
+
+## 3. This package: layout, entry points, and conventions
+
+### Package layout
+
+- [src/index.ts](src/index.ts) — browser entry. Exports [`bootstrapWebAuthn`](src/bootstrapWebAuthn.ts), [`registerComponents`](src/registerComponents.ts), [`getConfig` / `setConfig`](src/config.ts), the [`WebAuthn`](src/components/WebAuthn.ts) class (re-exported as `WcsWebAuthn`), the [base64url codec](src/codec/base64url.ts), and every shared type from [src/types.ts](src/types.ts).
+- [src/server/index.ts](src/server/index.ts) — Node entry. Exports [`WebAuthnCore`](src/core/WebAuthnCore.ts), [`InMemoryChallengeStore`](src/stores/InMemoryChallengeStore.ts), [`InMemoryCredentialStore`](src/stores/InMemoryCredentialStore.ts), [`SimpleWebAuthnVerifier`](src/server/SimpleWebAuthnVerifier.ts), [`HttpError`](src/server/HttpError.ts), and [`createWebAuthnHandlers`](src/server/createWebAuthnHandlers.ts). The two entry points are isolated through `package.json#exports` so a browser bundler never accidentally pulls server code.
+- [src/types.ts](src/types.ts) — single source of truth for `IChallengeStore`, `ICredentialStore`, `IWebAuthnVerifier`, `WebAuthnCoreOptions`, JSON-shaped option/response types, etc.
+
+### Default tag name and how to override it
+
+The Shell is registered as `<passkey-auth>` by default ([config.ts](src/config.ts)). Applications can rename it before registration via `bootstrapWebAuthn({ tagNames: { webauthn: "my-passkey" } })` or `setConfig(...)`. `registerComponents()` is idempotent — calling it twice with the same tag name is a no-op rather than a `customElements.define` throw.
+
+### Optional peer: `@simplewebauthn/server`
+
+`@simplewebauthn/server` is an **optional peer dependency** (`^11.0.0`). [`SimpleWebAuthnVerifier`](src/server/SimpleWebAuthnVerifier.ts) `await import`s it inside its methods so the bundler does not eagerly resolve it; a deployment that supplies its own `IWebAuthnVerifier` does not need the package installed at all. When the dynamic import fails, `_classifyImportError` distinguishes "the peer dep itself is missing" from a transitive failure (e.g. `cbor-x` not present) — preserve that distinction when touching the loader path.
+
+### Build, test, and integration commands
+
+- `npm run build` — `tsc` to `dist/` (the only output published to npm; see `package.json#files`).
+- `npm run dev` — `tsc --watch`.
+- `npm test` / `npm run test:unit` — Vitest over `__tests__/` (Vitest 4, happy-dom 20, v8 coverage).
+- `npm run test:coverage` — Vitest + v8 coverage; HTML report under `coverage/`.
+- `npm run test:integration` — `npm run build && playwright test`. The Playwright config lives at [playwright.config.ts](playwright.config.ts); browser-end tests live under [tests/](tests/).
+
+The build runs as a `prepack` hook, so `npm pack` / `npm publish` always ships a freshly compiled `dist/`.
+
+### Conventions enforced in the code (do not "clean these up")
+
+These look like inconsistencies if you skim, but every one of them encodes a security or invariant rationale that has already been worked out — preserve them unless you have a concrete reason to change them.
+
+- **Server-authoritative inputs.** `<passkey-auth>` deliberately does NOT expose `rp-id`, `user-verification`, or `attestation` as Shell attributes. Letting a compromised page set them would be a downgrade vector — these belong on `WebAuthnCoreOptions`. See the comment block in [src/components/WebAuthn.ts](src/components/WebAuthn.ts).
+- **Reactive Core fields are single-session.** `WebAuthnCore`'s `status` / `credentialId` / `user` / `error` are NOT safe to share across concurrent sessions. The shipped `createWebAuthnHandlers` deliberately reads only the *return value* of each command and never `core.user` / `core.credentialId`. Keep that contract intact when wiring new handlers — for shared deployments, treat the Core as stateless.
+- **Consume-once challenges.** `IChallengeStore.take()` reads-and-deletes atomically. The verify path takes the slot **before** running cryptographic verification, so a failed verify cannot be retried with the same challenge — retries must request a fresh one. This is the anti-replay invariant; do not reorder.
+- **Generic verify-error wording.** `verifyAuthentication` collapses "unknown credential", "wrong user", and "mode mismatch" into the single wire message `"credential not recognized for this session."` to close a credential-id / user enumeration channel. Internal differentiation lives in the structured log via `core.error`. Do not split these messages back out.
+- **base64url at the wire boundary.** Every cross-boundary blob (challenge, credential id, public key, attestation/assertion bytes) is base64url-encoded. The single source of truth is [src/codec/base64url.ts](src/codec/base64url.ts) and the regex `/^[A-Za-z0-9_-]+$/` reused by both [`WebAuthnCore`](src/core/WebAuthnCore.ts) and [`createWebAuthnHandlers`](src/server/createWebAuthnHandlers.ts). The decoder rejects characters outside that alphabet rather than silently round-tripping mangled bytes.
+- **Setter dedupe is reference-compare, not structural.** Both Core and Shell `_setUser` / `_setCredentialId` / `_setStatus` / `_setError` no-op on identity-equal writes (so reset paths like `null → null` and `"" → ""` do not emit spurious events) but still fire when the caller hands in a fresh-but-equal object. Do not "improve" this to `JSON.stringify` comparison — it is intentionally conservative.
+- **`clientVisible: true` error marker.** `_failVerify` attaches `clientVisible: true` to its thrown `Error`, and `_SerializableError` mirrors the flag onto the wrapper exposed via `core.error`. The verify handler relays `e.message` verbatim only when this flag is set; everything else collapses to a generic 500. Mirror the marker on any new error wrapper.
+- **AbortController identity guard.** `WebAuthn._runCeremony`'s `finally` clears `_abortController` only when it still points to the controller this ceremony installed (`if (this._abortController === ac)`). A newer `start()` may have already installed its own AC during the unwind; clobbering that with `null` would disarm the new ceremony's cancel channel.
+- **Generation-based serialization of overlapping `start()` calls.** Three or more overlapping `start()`s race on `_currentStart` under the naive "abort + await" shape. The fix is `_startGeneration` + `_startChain`; if you touch this, keep the synchronous abort BEFORE the chained segment so a never-resolving fetch in the previous ceremony cannot deadlock the new one.
+- **Counter==0 special case.** `WebAuthn §6.1.1` allows authenticators that report `signCount === 0` forever (iCloud/Google synced passkeys). The cloned-credential check therefore runs only when the *stored* counter is positive. Do not tighten this without breaking platform passkeys.
+- **In-memory stores are dev-only.** [`InMemoryChallengeStore`](src/stores/InMemoryChallengeStore.ts) and [`InMemoryCredentialStore`](src/stores/InMemoryCredentialStore.ts) are not horizontally-scalable (the challenge store's `take()` is only atomic within one process; the credential store loses everything on restart). Production deployments should swap them for Redis/DB-backed implementations of `IChallengeStore` / `ICredentialStore`.
