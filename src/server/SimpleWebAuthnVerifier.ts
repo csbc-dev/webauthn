@@ -99,7 +99,20 @@ export class SimpleWebAuthnVerifier implements IWebAuthnVerifier {
     // "" and match nothing, returning a confusing "not registered" error
     // instead of the true "the library returned unexpected data" signal.
     // Throw with a clear diagnostic so library drift surfaces immediately.
-    if (rawId === undefined || publicKey === undefined) {
+    //
+    // Use loose-equality (`== null`) so we catch both `undefined` and
+    // `null`. Also reject empty strings / empty buffers explicitly:
+    // those would pass the previous `=== undefined` check but then fail
+    // downstream as "base64url format violation" / "credential not
+    // recognized", obscuring the real cause (library drift).
+    const isMissingId =
+      rawId == null ||
+      (typeof rawId === "string" && rawId.length === 0) ||
+      (rawId instanceof Uint8Array && rawId.byteLength === 0);
+    const isMissingKey =
+      publicKey == null ||
+      (publicKey instanceof Uint8Array && publicKey.byteLength === 0);
+    if (isMissingId || isMissingKey) {
       throw new Error(
         "[@csbc-dev/webauthn] @simplewebauthn/server returned an unexpected " +
         "registrationInfo shape: missing credential id or publicKey. " +

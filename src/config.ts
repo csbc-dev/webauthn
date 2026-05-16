@@ -1,3 +1,4 @@
+import { raiseError } from "./raiseError.js";
 import { IConfig, IWritableConfig } from "./types.js";
 
 interface IInternalConfig extends IConfig {
@@ -53,8 +54,29 @@ export function getConfig(): IConfig {
 }
 
 export function setConfig(partialConfig: IWritableConfig): void {
+  // Invalidate the cached snapshot only when something actually changes.
+  // Calling setConfig({}) or setConfig({ tagNames: undefined }) must NOT
+  // bust the cache — `bootstrap.test.ts`'s "getConfig reuses the cached
+  // snapshot until config changes" contract relies on identity-equal
+  // re-reads when no mutation occurred.
   if (partialConfig.tagNames) {
-    Object.assign(_config.tagNames, partialConfig.tagNames);
+    // Only write recognized keys with validated values. Object.assign
+    // would otherwise let an untyped caller pour arbitrary properties
+    // (e.g. a self-reference brought in via a cyclic partial — see the
+    // regression test in bootstrap.test.ts) into `_config.tagNames`,
+    // and would also accept empty / non-string `webauthn` values that
+    // later cryptically fail inside `customElements.define`. Validate
+    // each known key explicitly here so a misconfiguration surfaces
+    // immediately at the call site instead of much later in the DOM.
+    const nextWebauthn = partialConfig.tagNames.webauthn;
+    if (nextWebauthn !== undefined) {
+      if (typeof nextWebauthn !== "string" || nextWebauthn.length === 0) {
+        raiseError(
+          `setConfig: tagNames.webauthn must be a non-empty string; got ${typeof nextWebauthn === "string" ? "\"\"" : typeof nextWebauthn}.`
+        );
+      }
+      _config.tagNames.webauthn = nextWebauthn;
+      frozenConfig = null;
+    }
   }
-  frozenConfig = null;
 }

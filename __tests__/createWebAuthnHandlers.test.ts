@@ -466,7 +466,7 @@ describe("createWebAuthnHandlers", () => {
     });
 
     it("invalid status numbers on Error are ignored (fallback applies)", async () => {
-      // `.status` must be an integer in [100, 600). A garbage value like
+      // `.status` must be an integer in [400, 600). A garbage value like
       // 99 or "401" should be ignored — otherwise an attacker-influenced
       // error could downgrade a 500 to a 200, etc.
       const garbageErr: any = new Error("x");

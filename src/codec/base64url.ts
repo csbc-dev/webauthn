@@ -17,6 +17,21 @@ const STANDARD_TO_URL: Record<string, string> = { "+": "-", "/": "_" };
 const URL_TO_STANDARD: Record<string, string> = { "-": "+", _: "/" };
 
 export function encode(bytes: ArrayBuffer | Uint8Array): string {
+  // Input validation: `decode` rejects non-strings loudly, so make
+  // `encode` symmetric. Without this guard `encode(null)` constructs a
+  // zero-byte `new Uint8Array(null)` (the spec permits null as an
+  // implicit length-0 hint) and silently returns `""`. The Shell-side
+  // serializers feed authenticator response fields through here — a
+  // non-spec authenticator that omits `clientDataJSON` / `signature` /
+  // etc. would otherwise produce a bogus all-empty wire payload that
+  // the server then fails to verify with a misleading "base64url
+  // format violation" error. Reject the structurally wrong input at
+  // the boundary so the failure points at the real culprit.
+  if (!(bytes instanceof Uint8Array) && !(bytes instanceof ArrayBuffer)) {
+    throw new TypeError(
+      "[@csbc-dev/webauthn] base64url encode expects an ArrayBuffer or Uint8Array."
+    );
+  }
   const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   let binary = "";
   for (let i = 0; i < view.byteLength; i++) binary += String.fromCharCode(view[i]);

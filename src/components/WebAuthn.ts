@@ -1,4 +1,5 @@
 import { encode, decode } from "../codec/base64url.js";
+import { KNOWN_TRANSPORTS_SET } from "../transports.js";
 import {
   IWcBindable, WebAuthnMode, WebAuthnStatus, WebAuthnUser,
   PublicKeyCredentialCreationOptionsJSON, PublicKeyCredentialRequestOptionsJSON,
@@ -63,6 +64,17 @@ export class WebAuthn extends HTMLElement {
   static get observedAttributes(): string[] {
     // Mirrors `wcBindable.inputs` — see note there about why rp-id /
     // user-verification / attestation are intentionally absent.
+    //
+    // No `attributeChangedCallback` is implemented by design: this Shell
+    // is pull-based — every attribute is read fresh from the DOM via the
+    // getters (`get challengeUrl()`, etc.) at the moment the ceremony
+    // consumes it. Declaring `observedAttributes` is still useful because
+    // it (a) documents which attributes are part of the public input
+    // surface, and (b) keeps the wcBindable.inputs / observedAttributes
+    // pair in sync for tooling that introspects both lists. If you ever
+    // need to react to mid-ceremony attribute changes, add an
+    // `attributeChangedCallback` here — but consider whether a fresh
+    // `start()` after the change is the safer model first.
     return [
       "mode",
       "challenge-url", "verify-url",
@@ -527,9 +539,30 @@ function _serializeRegistration(cred: PublicKeyCredential): RegistrationResponse
     throw new Error("[@csbc-dev/webauthn] credential.rawId is missing — authenticator returned a non-spec response.");
   }
   const response = cred.response as AuthenticatorAttestationResponse;
+  // Same spirit as the rawId guard: a non-spec authenticator that
+  // omits `clientDataJSON` / `attestationObject` would (with `encode`'s
+  // new input-type guard) throw a low-level "expects an ArrayBuffer or
+  // Uint8Array" TypeError. Label these explicitly so the failure mode
+  // matches the rawId case: callers see "authenticator returned a
+  // non-spec response" rather than a codec-level message.
+  if (response.clientDataJSON == null) {
+    throw new Error("[@csbc-dev/webauthn] credential.response.clientDataJSON is missing — authenticator returned a non-spec response.");
+  }
+  if (response.attestationObject == null) {
+    throw new Error("[@csbc-dev/webauthn] credential.response.attestationObject is missing — authenticator returned a non-spec response.");
+  }
   const transports = typeof (response as any).getTransports === "function"
     ? ((response as any).getTransports() as string[])
     : undefined;
+  // Symmetric with the `getTransports` guard above: not every
+  // PublicKeyCredential implementation (older engines, mocks, polyfills)
+  // exposes `getClientExtensionResults`. The prior unconditional call
+  // would throw `TypeError: cred.getClientExtensionResults is not a
+  // function` deep in the Shell, masking the real ceremony state. Fall
+  // back to `{}` so the wire shape stays valid.
+  const clientExtensionResults = typeof cred.getClientExtensionResults === "function"
+    ? (cred.getClientExtensionResults() as Record<string, unknown>)
+    : {};
   return {
     id: cred.id,
     rawId: encode(cred.rawId),
@@ -539,7 +572,7 @@ function _serializeRegistration(cred: PublicKeyCredential): RegistrationResponse
       attestationObject: encode(response.attestationObject),
       ...(transports ? { transports } : {}),
     },
-    clientExtensionResults: cred.getClientExtensionResults() as Record<string, unknown>,
+    clientExtensionResults,
     ...(cred.authenticatorAttachment
       ? { authenticatorAttachment: cred.authenticatorAttachment as "platform" | "cross-platform" }
       : {}),
@@ -590,28 +623,31 @@ async function _parseJsonOrThrow(res: Response, phase: "challenge" | "verify"): 
 }
 
 /**
- * Normalize an arbitrary caught value into an Error.
- *
- * Rethrown DOM primitives and most runtime failures are already Error
- * subclasses, but user code that uses `throw "oops"` or similar still
- * reaches our catch blocks. Coercing to Error keeps the reactive
- * `error` surface strongly typed (`Error | null`) without forcing the
- * ceremony's rethrow to change shape — we `throw e` (the original
- * value) from the catch block so the caller sees what they expect,
- * while `_error` observers see a well-typed Error wrapper.
- */
-/**
- * WebAuthn's `AuthenticatorTransport` is a closed union of literal
- * strings. The server-issued option blob types its transports field as
- * `string[]` (because JSON), and the prior code handed that straight
- * to `navigator.credentials.*` through a blunt `as AuthenticatorTransport[]`
- * cast. The browser *usually* ignores unrecognized transport strings,
- * but some engines throw on strict validation, and a compromised or
- * drift-buggy server could ship values that trigger a crash instead of
- * a clean retry. Filter to the documented literal union — values outside
+ * Filter raw transports against the WebAuthn-defined closed union (the
+ * single source of truth lives in `src/transports.ts` so the Shell and
+ * Core cannot drift). The server-issued option blob types its transports
+ * field as `string[]` (because JSON), and prior code handed that
+ * straight to `navigator.credentials.*` through a blunt
+ * `as AuthenticatorTransport[]` cast. The browser *usually* ignores
+ * unrecognized transport strings, but some engines throw on strict
+ * validation, and a compromised or drift-buggy server could ship values
+ * that trigger a crash instead of a clean retry. Filter — values outside
  * the set are silently dropped rather than passed through unchecked.
+ *
+ * Shell-side narrowing: `KNOWN_TRANSPORTS` includes WebAuthn Level 3
+ * additions (e.g. `"smart-card"`) so the Core can persist credentials
+ * coming from Level 3-capable browsers without dropping data. The Shell,
+ * however, hands the result to `navigator.credentials.*` and must only
+ * pass values that the *running* engine's `AuthenticatorTransport` union
+ * accepts — TS 5.x's bundled `lib.dom.d.ts` still types
+ * `AuthenticatorTransport` as the Level 2 five-element set, and the
+ * "strict-validation engines that throw" case above applies to Level 3
+ * strings on Level 2-only browsers as well. Keep an explicit Level 2
+ * sub-set here so the Shell stays conservative even if a server ships
+ * Level 3 transports to a Level 2 client. When TS lib.dom catches up,
+ * this list can be deleted in favor of `KNOWN_TRANSPORTS_SET` alone.
  */
-const _TRANSPORTS: ReadonlySet<AuthenticatorTransport> = new Set<AuthenticatorTransport>([
+const _SHELL_TRANSPORTS_LIB_DOM: ReadonlySet<string> = new Set<string>([
   "usb", "nfc", "ble", "internal", "hybrid",
 ]);
 
@@ -619,7 +655,11 @@ function _filterTransports(raw: unknown): AuthenticatorTransport[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const out: AuthenticatorTransport[] = [];
   for (const t of raw) {
-    if (typeof t === "string" && _TRANSPORTS.has(t as AuthenticatorTransport)) {
+    if (
+      typeof t === "string" &&
+      KNOWN_TRANSPORTS_SET.has(t) &&
+      _SHELL_TRANSPORTS_LIB_DOM.has(t)
+    ) {
       out.push(t as AuthenticatorTransport);
     }
   }
@@ -684,6 +724,17 @@ function _validateVerifyResponse(
   }
 }
 
+/**
+ * Normalize an arbitrary caught value into an Error.
+ *
+ * Rethrown DOM primitives and most runtime failures are already Error
+ * subclasses, but user code that uses `throw "oops"` or similar still
+ * reaches our catch blocks. Coercing to Error keeps the reactive
+ * `error` surface strongly typed (`Error | null`) without forcing the
+ * ceremony's rethrow to change shape — we `throw e` (the original
+ * value) from the catch block so the caller sees what they expect,
+ * while `_error` observers see a well-typed Error wrapper.
+ */
 function _asError(e: unknown): Error {
   if (e instanceof Error) return e;
   // `null` / `undefined` — code occasionally surfaces these when a
@@ -715,6 +766,25 @@ function _serializeAuthentication(cred: PublicKeyCredential): AuthenticationResp
     throw new Error("[@csbc-dev/webauthn] credential.rawId is missing — authenticator returned a non-spec response.");
   }
   const response = cred.response as AuthenticatorAssertionResponse;
+  // Mirror `_serializeRegistration`'s response-field guards. Missing
+  // `clientDataJSON` / `authenticatorData` / `signature` would otherwise
+  // surface as a codec TypeError ("encode expects an ArrayBuffer …")
+  // far from the real cause — the authenticator omitting a mandatory
+  // assertion field.
+  if (response.clientDataJSON == null) {
+    throw new Error("[@csbc-dev/webauthn] credential.response.clientDataJSON is missing — authenticator returned a non-spec response.");
+  }
+  if (response.authenticatorData == null) {
+    throw new Error("[@csbc-dev/webauthn] credential.response.authenticatorData is missing — authenticator returned a non-spec response.");
+  }
+  if (response.signature == null) {
+    throw new Error("[@csbc-dev/webauthn] credential.response.signature is missing — authenticator returned a non-spec response.");
+  }
+  // Same defensive guard as `_serializeRegistration` — older engines,
+  // mocks, and stripped polyfills can omit `getClientExtensionResults`.
+  const clientExtensionResults = typeof cred.getClientExtensionResults === "function"
+    ? (cred.getClientExtensionResults() as Record<string, unknown>)
+    : {};
   return {
     id: cred.id,
     rawId: encode(cred.rawId),
@@ -725,7 +795,7 @@ function _serializeAuthentication(cred: PublicKeyCredential): AuthenticationResp
       signature: encode(response.signature),
       ...(response.userHandle ? { userHandle: encode(response.userHandle) } : {}),
     },
-    clientExtensionResults: cred.getClientExtensionResults() as Record<string, unknown>,
+    clientExtensionResults,
     ...(cred.authenticatorAttachment
       ? { authenticatorAttachment: cred.authenticatorAttachment as "platform" | "cross-platform" }
       : {}),

@@ -118,7 +118,12 @@ export interface CreateWebAuthnHandlersOptions {
    * applies a server-side duplicate guard at verify, so omitting this
    * hook is safe — but doing so loses the better browser-side UX.
    */
-  listExistingCredentials?(request: Request, userId: string): string[] | Promise<string[]>;
+  listExistingCredentials?(
+    request: Request,
+    userId: string,
+  ):
+    | Array<string | { id: string; transports?: string[] }>
+    | Promise<Array<string | { id: string; transports?: string[] }>>;
   /**
    * Authenticate only. Resolve the userId whose credentials should be
    * surfaced in `allowCredentials`, given the request and the

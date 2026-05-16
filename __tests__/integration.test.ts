@@ -193,7 +193,14 @@ interface Harness {
   credentialStore: InMemoryCredentialStore;
   verifier: StubVerifier;
   handlers: WebAuthnHandlers;
-  /** every Request that reached either endpoint, in order. */
+  /**
+   * Every Request that reached either endpoint, in order. Not currently
+   * asserted on, but retained as a diagnostic affordance: when an integration
+   * test fails because of an unexpected fetch ordering, dumping `h.requestLog`
+   * is the fastest way to see what the Shell actually sent versus what the
+   * test expected. New tests that need wire-level sequencing assertions
+   * should consume it from here rather than re-adding the plumbing.
+   */
   requestLog: Array<{ url: string; sessionId?: string; mode?: string }>;
   /** records hook firings so cross-endpoint sequencing is observable. */
   hookLog: string[];
@@ -204,7 +211,12 @@ interface HarnessOptions {
   resolveSessionId?: (req: Request) => string | null | Promise<string | null>;
   resolveUser?: (userId: string) => WebAuthnUser | null | Promise<WebAuthnUser | null>;
   normalizeRegistrationUser?: (req: Request, proposed: WebAuthnUser) => WebAuthnUser | Promise<WebAuthnUser>;
-  listExistingCredentials?: (req: Request, userId: string) => string[] | Promise<string[]>;
+  listExistingCredentials?: (
+    req: Request,
+    userId: string,
+  ) =>
+    | Array<string | { id: string; transports?: string[] }>
+    | Promise<Array<string | { id: string; transports?: string[] }>>;
   resolveAuthenticationUserId?: (req: Request, requestedUserId: string | undefined) => string | null | Promise<string | null>;
 }
 

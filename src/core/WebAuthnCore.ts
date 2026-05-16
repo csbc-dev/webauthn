@@ -1,5 +1,6 @@
 import { raiseError } from "../raiseError.js";
 import { encode, randomChallenge } from "../codec/base64url.js";
+import { KNOWN_TRANSPORTS_SET } from "../transports.js";
 import {
   IWcBindable, WebAuthnCoreOptions, WebAuthnStatus, WebAuthnUser,
   PublicKeyCredentialCreationOptionsJSON,
@@ -112,12 +113,34 @@ export class WebAuthnCore extends EventTarget {
   private _credentialId: string = "";
   private _user: WebAuthnUser | null = null;
   private _error: Error | null = null;
+  // Tracks the *original* (un-wrapped) Error reference last handed to
+  // `_setError`. The reactive `_error` slot holds the `_SerializableError`
+  // wrapper, so a naive `this._error === err` compare would always be
+  // false (wrapper !== source) and dedupe would never fire — turning the
+  // intended "identical writes do not re-dispatch" guard into a silent
+  // no-op for every Error path. By caching the source reference we can
+  // detect "the same Error is being set twice in a row" before the wrap
+  // step and skip the dispatch. The cached reference is reset to `null`
+  // when `_setError(null)` runs so the null → Error transition still
+  // fires (and the Error → null reset path stays distinct).
+  private _lastErrorSource: Error | null = null;
 
   constructor(options: WebAuthnCoreOptions, target?: EventTarget) {
     super();
     if (!options) raiseError("options is required.");
-    if (!options.rpId) raiseError("options.rpId is required.");
-    if (!options.rpName) raiseError("options.rpName is required.");
+    // Symmetric type-shape checks with `origin` / `user.*` below — a bare
+    // truthy check accepts e.g. `rpId: 123`, which TypeScript would reject
+    // but a direct JS caller (or a hand-rolled handler bypassing the typed
+    // surface) could pass. The downstream verifier and option-blob
+    // serializers all assume strings, so a numeric rpId would silently
+    // corrupt the relying-party identifier embedded in clientDataJSON.
+    // Reject loudly at construction.
+    if (typeof options.rpId !== "string" || options.rpId.length === 0) {
+      raiseError("options.rpId must be a non-empty string.");
+    }
+    if (typeof options.rpName !== "string" || options.rpName.length === 0) {
+      raiseError("options.rpName must be a non-empty string.");
+    }
     if (!options.origin) raiseError("options.origin is required.");
     // Shape check the origin more tightly. A bare truthy check lets
     // `origin: []` through — which passes schema but causes every verify
@@ -145,8 +168,40 @@ export class WebAuthnCore extends EventTarget {
     this._userVerification = options.userVerification ?? "preferred";
     this._attestation = options.attestation ?? "none";
     this._timeout = options.timeout ?? DEFAULT_TIMEOUT_MS;
+    // Validate timeout symmetrically with Shell's `get timeout()`
+    // (Number.isFinite && > 0). Without this, a caller bypassing the
+    // typed surface could pass `NaN` / negative / `Infinity`, which would
+    // flow directly into `navigator.credentials.create()/get()` via the
+    // option blob's `timeout` field. The platform's handling of an
+    // invalid timeout is implementation-defined (some browsers ignore,
+    // others reject the call entirely) — either way the failure mode is
+    // opaque to the operator. Fail loudly at construction.
+    if (!Number.isFinite(this._timeout) || this._timeout <= 0) {
+      raiseError("options.timeout must be a positive finite number (ms).");
+    }
+    // Reject cryptographically-weak challenge lengths. WebAuthn §13.4.3
+    // recommends >=16 random bytes; the default of 32 sits at the spec's
+    // recommended floor. Without this guard, a caller could pass
+    // `challengeBytes: 1` (or even 0) — `randomChallenge` only checks
+    // `len > 0`, so a 1-byte challenge would silently weaken replay
+    // protection to a brute-forceable space. Surface the misconfiguration
+    // as a thrown Error at construction so the failure mode is loud and
+    // immediate rather than a slow-burn security regression in production.
     this._challengeBytes = options.challengeBytes ?? DEFAULT_CHALLENGE_BYTES;
+    if (!Number.isInteger(this._challengeBytes) || this._challengeBytes < 16) {
+      raiseError("options.challengeBytes must be an integer >= 16 (WebAuthn §13.4.3 recommended floor).");
+    }
     this._challengeTtlMs = options.challengeTtlMs ?? DEFAULT_CHALLENGE_TTL_MS;
+    // Validate the TTL. The expiry check is `Date.now() - slot.createdAt
+    // > this._challengeTtlMs` — with `NaN`, that comparison is always
+    // `false`, so a NaN TTL turns the challenge slot into a permanent,
+    // never-expiring replay window. `0` or negative would flip the
+    // opposite way (every slot is "expired" the instant it's stored,
+    // making registration/authentication impossible). Both modes are
+    // silent misconfigurations; surface them at construction.
+    if (!Number.isFinite(this._challengeTtlMs) || this._challengeTtlMs <= 0) {
+      raiseError("options.challengeTtlMs must be a positive finite number (ms).");
+    }
   }
 
   // --- Output state ---
@@ -214,7 +269,14 @@ export class WebAuthnCore extends EventTarget {
     // null-detail `passkey-auth:error` event on every challenge call.
     // Reference-compare only — a fresh-but-equal Error wrapper still
     // fires (consistent with `_setUser`'s policy).
-    if (this._error === err) return;
+    //
+    // Compare against the cached *source* Error (`_lastErrorSource`),
+    // NOT `this._error`. The latter is the `_SerializableError` wrapper
+    // produced below, so `this._error === err` would always be false
+    // for any non-null Error (wrapper !== source) and dedupe would
+    // never fire for the "same Error twice in a row" case.
+    if (this._lastErrorSource === err) return;
+    this._lastErrorSource = err;
     this._error = err ? _wrapSerializable(err) : null;
     this._target.dispatchEvent(new CustomEvent("passkey-auth:error", {
       detail: this._error, bubbles: true,
@@ -248,7 +310,14 @@ export class WebAuthnCore extends EventTarget {
   async createRegistrationChallenge(
     sessionId: string,
     user: WebAuthnUser,
-    existingCredentialIds: string[] = [],
+    // Accept either a flat list of credential ids OR descriptor objects that
+    // include `transports`. The transports hint propagates into the option
+    // blob's `excludeCredentials[].transports`, which improves the browser's
+    // match UX when the user already has a credential registered (the
+    // browser can preselect / steer the matching authenticator instead of
+    // listing every option). Keeping `string[]` accepted preserves
+    // backward compatibility with existing callers.
+    existingCredentialIds: Array<string | { id: string; transports?: string[] }> = [],
   ): Promise<PublicKeyCredentialCreationOptionsJSON> {
     if (!sessionId) raiseError("sessionId is required.");
     if (!user?.id || !user.name || !user.displayName) {
@@ -291,10 +360,21 @@ export class WebAuthnCore extends EventTarget {
     // unrelated bytes (the browser tolerates padding-free base64 with
     // loose alphabets on some engines) and the authenticator's
     // exclude-list check would either miss the match or throw.
-    for (const id of existingCredentialIds) {
+    // Normalize the Union input to the descriptor shape used in the option
+    // blob. Each entry is either a bare base64url id (legacy shape) or an
+    // object `{ id, transports? }`; in both cases we validate `id` and
+    // filter `transports` to the WebAuthn-defined alphabet (the same set
+    // used at credential-store persist time).
+    const normalizedExcludes: Array<{ id: string; transports?: string[] }> = [];
+    for (const entry of existingCredentialIds) {
+      const id = typeof entry === "string" ? entry : entry?.id;
       if (typeof id !== "string" || !_BASE64URL_RE.test(id)) {
-        raiseError("existingCredentialIds entries must be non-empty base64url strings.");
+        raiseError("existingCredentialIds entries must be non-empty base64url strings or { id, transports? } objects.");
       }
+      const transports = typeof entry === "string"
+        ? undefined
+        : _filterPersistedTransports(entry.transports);
+      normalizedExcludes.push(transports ? { id, transports } : { id });
     }
     this._setError(null);
     // Clear residual credentialId from any prior completed ceremony.
@@ -334,8 +414,10 @@ export class WebAuthnCore extends EventTarget {
         challenge,
         pubKeyCredParams: DEFAULT_PUB_KEY_PARAMS,
         timeout: this._timeout,
-        excludeCredentials: existingCredentialIds.map((id) => ({
-          id, type: "public-key",
+        excludeCredentials: normalizedExcludes.map((e) => ({
+          id: e.id,
+          type: "public-key",
+          ...(e.transports ? { transports: e.transports } : {}),
         })),
         authenticatorSelection: {
           userVerification: this._userVerification,
@@ -803,15 +885,11 @@ function _wrapSerializable(err: Error): Error {
  * `transports` is optional, and an empty array is semantically the same
  * as "unknown".
  */
-const _PERSISTED_TRANSPORTS: ReadonlySet<string> = new Set([
-  "usb", "nfc", "ble", "internal", "hybrid",
-]);
-
 function _filterPersistedTransports(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const out: string[] = [];
   for (const t of raw) {
-    if (typeof t === "string" && _PERSISTED_TRANSPORTS.has(t)) {
+    if (typeof t === "string" && KNOWN_TRANSPORTS_SET.has(t)) {
       out.push(t);
     }
   }

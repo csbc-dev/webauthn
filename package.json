@@ -29,7 +29,7 @@
     "test:coverage": "npm run test:unit:coverage",
     "test:unit": "vitest run __tests__",
     "test:unit:watch": "vitest __tests__",
-    "test:unit:coverage": "vitest run __tests__ --coverage --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=html --coverage.include=src/**/*.ts --coverage.exclude=src/types.ts --coverage.exclude=src/index.ts --coverage.exclude=src/server/index.ts",
+    "test:unit:coverage": "vitest run __tests__ --coverage",
     "test:integration": "npm run build && playwright test"
   },
   "keywords": [
@@ -64,5 +64,9 @@
     "url": "https://github.com/mogera551/csbc-dev.git",
     "directory": "webauthn"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {}
 }

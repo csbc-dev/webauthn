@@ -91,8 +91,12 @@ describe("bootstrap + registration", () => {
     expect(() => setConfig(cyclic)).not.toThrow();
     // getConfig deep-clones + deep-freezes the live config; without the
     // cycle guard this would recurse forever even though the cycle was
-    // only on the *partial* (Object.assign brings the back-reference
-    // into _config.tagNames).
+    // only on the *partial*. The current setConfig extracts
+    // `nextWebauthn` and assigns it directly to `_config.tagNames.webauthn`,
+    // so the cyclic structure is dropped at the input layer and
+    // `_config.tagNames` stays acyclic — but the deepFreeze / deepClone
+    // cycle guard is still the contract that defends `getConfig()` from
+    // any future regression where the back-reference does leak through.
     expect(() => getConfig()).not.toThrow();
     expect(config.tagNames.webauthn).toBe("cycle-tag");
   });

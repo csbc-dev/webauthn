@@ -17,6 +17,20 @@ export class HttpError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
     super(message);
+    // Reject statuses that the handler cannot semantically relay.
+    // `_statusFromError` only honors `[400, 600)` for thrown values —
+    // anything outside falls through to the endpoint default (500 / 400),
+    // which would mean a hook throwing `new HttpError(200, "ok")` ends up
+    // serving HTTP 500 with body "ok". That status/body mismatch is a
+    // confusing footgun, and constructing such an error in the first
+    // place is almost certainly a typo / misuse. Fail loudly at the
+    // construction site so the bug surfaces in the offending hook
+    // instead of as a misleading 500 to the client.
+    if (!Number.isInteger(status) || status < 400 || status >= 600) {
+      throw new RangeError(
+        `[@csbc-dev/webauthn] HttpError status must be an integer in [400, 600); got ${status}.`
+      );
+    }
     this.name = "HttpError";
     this.status = status;
   }

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { WebAuthnCore } from "../src/core/WebAuthnCore";
 import { InMemoryChallengeStore } from "../src/stores/InMemoryChallengeStore";
 import { InMemoryCredentialStore } from "../src/stores/InMemoryCredentialStore";
